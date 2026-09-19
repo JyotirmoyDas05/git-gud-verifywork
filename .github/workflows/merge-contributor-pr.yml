@@ -118,6 +118,11 @@ jobs:
         if: steps.check.outputs.ok == 'true'
         uses: actions/github-script@v7
         with:
+          # GITHUB_TOKEN returns 403 here even with contents+pull-requests
+          # write. The bot is a collaborator on this repo, so use its token -
+          # which also makes the merge show up as the bot, matching the story
+          # the challenges tell.
+          github-token: ${{ secrets.BOT_PAT }}
           script: |
             await github.rest.pulls.merge({
               ...context.repo,
@@ -132,6 +137,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           # build-index.mjs reads commit dates, so it needs real history.
           fetch-depth: 0
+          token: ${{ secrets.BOT_PAT }}
 
       - name: Rebuild index.html and contributors.json
         if: steps.check.outputs.ok == 'true'
