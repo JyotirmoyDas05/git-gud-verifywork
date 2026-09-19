@@ -1,0 +1,18 @@
+[package]
+name = "quilt"
+version = "0.1.0"
+edition = "2021"
+description = "Generates a learner's quilt patch for git-gud-verifywork."
+
+[dependencies]
+# patchwork lays a quilt from traditional blocks (pinwheel, flying geese, rail
+# fence). It is CC0, and it exists in the Rust crate but not in npm
+# @dicebear/collection 9.4.x — which is why this is Rust and not a Node script.
+dicebear-core = "10.6"
+dicebear-styles = { version = "10.6", default-features = false, features = ["patchwork"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true

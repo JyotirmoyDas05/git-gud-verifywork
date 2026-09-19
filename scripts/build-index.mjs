@@ -10,7 +10,7 @@
 // template engine would mean an npm install for ~40 lines of string building.
 
 import { execFileSync } from "node:child_process";
-import { readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, writeFileSync } from "node:fs";
 
 const REPO = "JyotirmoyDas05/git-gud-verifywork";
 const SHOWN = 100;
@@ -65,11 +65,24 @@ function escapeHtml(value) {
 const files = readdirSync("contributors").filter((f) => /^add-.+\.txt$/i.test(f));
 const dates = addedDates();
 
+// Quilt patches land in contributors/art/<username>.svg. The bot pushes one to
+// each learner's branch in challenge 9; it arrives here with their pull request.
+const art = new Set(
+  (existsSync("contributors/art") ? readdirSync("contributors/art") : [])
+    .filter((f) => f.endsWith(".svg"))
+    .map((f) => f.replace(/\.svg$/, "").toLowerCase()),
+);
+
 const contributors = files
-  .map((file) => ({
-    username: usernameOf(file),
-    at: dates.get(`contributors/${file}`) ?? null,
-  }))
+  .map((file) => {
+    const username = usernameOf(file);
+    const key = username.toLowerCase();
+    return {
+      username,
+      at: dates.get(`contributors/${file}`) ?? null,
+      patch: art.has(key) ? `contributors/art/${key}.svg` : null,
+    };
+  })
   // Newest first; anything with no recorded date sorts last.
   .sort((a, b) => (b.at ?? "").localeCompare(a.at ?? ""));
 
@@ -79,6 +92,19 @@ writeFileSync(
 );
 
 const recent = contributors.slice(0, SHOWN);
+
+// The quilt: every patch anyone has contributed, tiled edge to edge. This is
+// the point of the whole exercise, so it goes above the name list.
+const quilt = contributors
+  .filter((c) => c.patch)
+  .map(
+    (c) =>
+      `          <a class="patch" href="https://github.com/${encodeURIComponent(
+        c.username,
+      )}" target="_blank" rel="noopener" title="@${escapeHtml(c.username)}">` +
+      `<img src="${c.patch}" alt="" loading="lazy" width="80" height="80"></a>`,
+  )
+  .join("\n");
 
 const list = recent
   .map(
@@ -115,6 +141,12 @@ const html = `<!doctype html>
       <h3>You now know alternate meanings for the words <strong>fork</strong> and
         <strong>branch</strong>, and you've <strong>collaborated</strong> with someone
         (or a robot) elsewhere. Below are the last ${SHOWN} to have finished.</h3>
+
+${
+  quilt
+    ? `      <div id="quilt">\n${quilt}\n      </div>`
+    : ""
+}
 
       <div id="compatriots">
 ${recent.length ? `        <ul class="compatriots-list">\n${list}\n        </ul>` : empty}

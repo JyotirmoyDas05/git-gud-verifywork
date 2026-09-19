@@ -301,3 +301,35 @@ ul.what-next-list {
 }
 
 h2 { text-align: center; }
+
+/* The quilt: every contributor's patch, tiled edge to edge with no gaps so it
+   reads as one piece of cloth rather than a grid of icons. */
+#quilt {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 0;
+  max-width: 720px;
+  margin: 0 auto 30px;
+  line-height: 0;
+  border: 4px solid #fff;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+#quilt .patch {
+  display: block;
+  border-bottom: 0;
+}
+
+#quilt img {
+  display: block;
+  width: 100%;
+  height: auto;
+  transition: transform 120ms ease;
+}
+
+#quilt .patch:hover img {
+  transform: scale(1.12);
+  position: relative;
+  z-index: 1;
+}
