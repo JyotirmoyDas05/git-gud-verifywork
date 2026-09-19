@@ -1,0 +1,5 @@
+* text=auto eol=lf
+
+# Contributor files come from every OS under the sun. Leave them exactly as
+# submitted — nothing reads their contents, only their names.
+contributors/* -text

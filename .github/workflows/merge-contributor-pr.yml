@@ -1,0 +1,104 @@
+name: Merge contributor PR
+
+# pull_request_target runs with repository secrets and write access, so this
+# workflow MUST NOT check out or execute any code from the pull request.
+# It only reads the changed-file list through the API, merges, and then
+# rebuilds from the base branch. Contributor input is a filename and never
+# reaches a shell.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+    paths:
+      - "contributors/**"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  # Rebuilding index.html is a commit to main. Every workflow that pushes to
+  # main shares this group so they queue instead of racing into a
+  # non-fast-forward push.
+  group: main-push
+  cancel-in-progress: false
+
+jobs:
+  validate-and-merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the pull request touches exactly one expected file
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const author = pr.user.login;
+
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              { ...context.repo, pull_number: pr.number, per_page: 100 },
+            );
+
+            const fail = async (reason) => {
+              core.setOutput('ok', 'false');
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: pr.number,
+                body: `Thanks for the pull request! It can't be merged automatically yet:\n\n> ${reason}\n\n`
+                  + `This pull request should add exactly one file, named \`contributors/add-${author.toLowerCase()}.txt\`, `
+                  + `and change nothing else. Fix it up and push again — this check runs on every push.`,
+              });
+              core.notice(`Rejected: ${reason}`);
+            };
+
+            if (files.length !== 1) {
+              return fail(`It changes ${files.length} files. It should change exactly 1.`);
+            }
+
+            const file = files[0];
+            if (file.status !== 'added') {
+              return fail(`The file is \`${file.status}\`, not \`added\`.`);
+            }
+
+            // GitHub usernames are case-insensitive but the filesystem here is
+            // not; compare folded and require a lowercase name on disk so two
+            // spellings of one user cannot both land.
+            const expected = `contributors/add-${author.toLowerCase()}.txt`;
+            if (file.filename !== expected) {
+              return fail(`The file is \`${file.filename}\`. It should be \`${expected}\` — all lowercase, and matching your own username.`);
+            }
+
+            core.setOutput('ok', 'true');
+
+      - name: Merge
+        if: steps.check.outputs.ok == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.pulls.merge({
+              ...context.repo,
+              pull_number: context.payload.pull_request.number,
+              merge_method: 'squash',
+            });
+
+      - name: Check out the base branch
+        if: steps.check.outputs.ok == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          # build-index.mjs reads commit dates, so it needs real history.
+          fetch-depth: 0
+
+      - name: Rebuild index.html and contributors.json
+        if: steps.check.outputs.ok == 'true'
+        run: node scripts/build-index.mjs
+
+      - name: Commit the rebuild
+        if: steps.check.outputs.ok == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html contributors.json
+          git diff --staged --quiet && echo "Nothing to commit." && exit 0
+          git commit -m "Rebuild contributor list [skip ci]"
+          git push

@@ -1,0 +1,98 @@
+name: Accept collaborator invites
+
+# Challenge 8 asks the learner to add the bot as a collaborator on their fork.
+# The app cannot verify that directly: GET /repos/{owner}/{repo}/collaborators
+# needs push access and returns 401 unauthenticated. So the bot records its own
+# acceptance in collaborators.json, which GitHub Pages serves publicly and the
+# app can simply fetch.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: main-push
+  cancel-in-progress: false
+
+jobs:
+  accept:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Accept pending invitations and record them
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.BOT_PAT }}
+          script: |
+            const fs = require('fs');
+
+            const EXPECTED_REPO = 'git-gud-verifywork';
+            const UPSTREAM = 'JyotirmoyDas05/git-gud-verifywork';
+
+            const invites = await github.paginate(
+              github.rest.repos.listInvitationsForAuthenticatedUser,
+              { per_page: 100 },
+            );
+
+            const accepted = [];
+
+            for (const invite of invites) {
+              const repo = invite.repository;
+
+              // The bot must not become a collaborator on arbitrary repositories
+              // just because someone invited it. Only forks of this project,
+              // still carrying its name, are in scope.
+              const isOurs =
+                repo.name === EXPECTED_REPO &&
+                repo.fork === true &&
+                repo.full_name.toLowerCase() !== UPSTREAM.toLowerCase();
+
+              if (!isOurs) {
+                core.notice(`Declining invite to ${repo.full_name} — not a fork of ${UPSTREAM}.`);
+                await github.rest.repos.declineInvitationForAuthenticatedUser({
+                  invitation_id: invite.id,
+                });
+                continue;
+              }
+
+              await github.rest.repos.acceptInvitationForAuthenticatedUser({
+                invitation_id: invite.id,
+              });
+              accepted.push(repo.owner.login);
+              core.notice(`Accepted invite from ${repo.owner.login}.`);
+            }
+
+            // Read-modify-write the public receipt. Usernames are stored
+            // lowercase; the app folds case before comparing.
+            const path = 'collaborators.json';
+            const current = fs.existsSync(path)
+              ? JSON.parse(fs.readFileSync(path, 'utf8'))
+              : { collaborators: [] };
+
+            const seen = new Set(current.collaborators.map((c) => c.username));
+            let added = 0;
+
+            for (const login of accepted) {
+              const username = login.toLowerCase();
+              if (seen.has(username)) continue;
+              seen.add(username);
+              current.collaborators.push({ username, at: new Date().toISOString() });
+              added++;
+            }
+
+            current.total = current.collaborators.length;
+            fs.writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`);
+            core.setOutput('added', String(added));
+
+      - name: Commit the receipt
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add collaborators.json
+          git diff --staged --quiet && echo "No new collaborators." && exit 0
+          git commit -m "Record accepted collaborator invites [skip ci]"
+          git push
