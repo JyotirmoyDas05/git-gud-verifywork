@@ -26,13 +26,28 @@ jobs:
   validate-and-merge:
     runs-on: ubuntu-latest
     steps:
-      - name: Check the pull request touches exactly one expected file
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/quilt
+
+      - name: Build the patch generator
+        run: cargo build --release --manifest-path tools/quilt/Cargo.toml
+
+      - name: Check the pull request only adds what it should
         id: check
         uses: actions/github-script@v7
         with:
           script: |
+            const { execFileSync } = require('child_process');
+
             const pr = context.payload.pull_request;
             const author = pr.user.login;
+            const folded = author.toLowerCase();
 
             const files = await github.paginate(
               github.rest.pulls.listFiles,
@@ -45,29 +60,58 @@ jobs:
                 ...context.repo,
                 issue_number: pr.number,
                 body: `Thanks for the pull request! It can't be merged automatically yet:\n\n> ${reason}\n\n`
-                  + `This pull request should add exactly one file, named \`contributors/add-${author.toLowerCase()}.txt\`, `
-                  + `and change nothing else. Fix it up and push again — this check runs on every push.`,
+                  + `It should add your contributor file \`contributors/add-${author}.txt\` — plus, if @gitgud-verifybot has already sent it, your quilt patch \`contributors/art/${folded}.svg\`. Nothing else.\n\n`
+                  + `Fix it up and push again; this check runs on every push.`,
               });
               core.notice(`Rejected: ${reason}`);
             };
 
-            if (files.length !== 1) {
-              return fail(`It changes ${files.length} files. It should change exactly 1.`);
+            // A learner's branch legitimately carries two files by the time
+            // they open a pull request: the one they wrote, and the quilt
+            // patch the bot pushed in challenge 9.
+            const txtPath = `contributors/add-${folded}.txt`;
+            const artPath = `contributors/art/${folded}.svg`;
+
+            let sawTxt = false;
+            let sawArt = false;
+
+            for (const file of files) {
+              if (file.status !== 'added') {
+                return fail(`\`${file.filename}\` is ${file.status}, and this should only ever add files.`);
+              }
+
+              // GitHub usernames are case-insensitive-unique, so one account
+              // cannot be both "Ana" and "ana". Fold before comparing rather
+              // than demanding a spelling the challenge never asked for.
+              const name = file.filename.toLowerCase();
+
+              if (name === txtPath) { sawTxt = true; continue; }
+
+              if (name === artPath) {
+                // The patch is deterministic, so anything that is not exactly
+                // what the generator produces for this username was not put
+                // there by the bot. Without this, any learner could publish an
+                // arbitrary image onto the public quilt.
+                const expected = execFileSync('tools/quilt/target/release/quilt', [folded], { encoding: 'utf8' }).trim();
+                const blob = await github.rest.git.getBlob({
+                  ...context.repo, file_sha: file.sha,
+                });
+                const actual = Buffer.from(blob.data.content, 'base64').toString('utf8').trim();
+                if (actual !== expected) {
+                  return fail(`\`${file.filename}\` is not the patch @gitgud-verifybot generated for you. Delete it and pull again.`);
+                }
+                sawArt = true;
+                continue;
+              }
+
+              return fail(`\`${file.filename}\` does not belong in this pull request.`);
             }
 
-            const file = files[0];
-            if (file.status !== 'added') {
-              return fail(`The file is \`${file.status}\`, not \`added\`.`);
+            if (!sawTxt) {
+              return fail(`No \`contributors/add-${author}.txt\` in this pull request.`);
             }
 
-            // GitHub usernames are case-insensitive but the filesystem here is
-            // not; compare folded and require a lowercase name on disk so two
-            // spellings of one user cannot both land.
-            const expected = `contributors/add-${author.toLowerCase()}.txt`;
-            if (file.filename !== expected) {
-              return fail(`The file is \`${file.filename}\`. It should be \`${expected}\` — all lowercase, and matching your own username.`);
-            }
-
+            core.info(`Accepted: txt=${sawTxt} art=${sawArt}`);
             core.setOutput('ok', 'true');
 
       - name: Merge
